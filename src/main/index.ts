@@ -8,6 +8,40 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 
 let mainWindow: BrowserWindow | null = null
 let captureWindow: BrowserWindow | null = null
+let wechatBridgeProcess: ReturnType<typeof spawn> | null = null
+
+const getSidecarWeChatDir = (): string => {
+  const appPath = app.getAppPath()
+  const candidate = join(dirname(appPath), 'sidecar_wechat')
+  return candidate
+}
+
+const getWeChatBridgeScript = (): string => {
+  return join(getSidecarWeChatDir(), 'wechat_bridge.py')
+}
+
+const getWeChatBridgeConfig = (): string => {
+  return join(getSidecarWeChatDir(), 'config.yaml')
+}
+
+const getWeChatBridgeBaseUrl = (): string => {
+  return 'http://127.0.0.1:51234'
+}
+
+const waitForWeChatBridgeReady = async (timeoutMs: number): Promise<void> => {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${getWeChatBridgeBaseUrl()}/health`, { method: 'GET' })
+      if (res.ok) {
+        return
+      }
+    } catch (e) {
+    }
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  throw new Error('WeChat bridge not ready')
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -126,7 +160,15 @@ ipcMain.handle('do-capture', async (_, coords) => {
       height: Math.max(1, Math.round(coords.h * scaleFactor))
     }
     const image = primarySource.thumbnail.crop(cropRect)
-    const dataUrl = image.toDataURL()
+    
+    // Upscale image 2x to improve OCR accuracy for small text
+    const scaledImage = image.resize({
+      width: image.getSize().width * 2,
+      height: image.getSize().height * 2,
+      quality: 'high'
+    })
+    
+    const dataUrl = scaledImage.toDataURL()
     
     let isManual = false
     if (captureWindow) {
@@ -152,21 +194,42 @@ ipcMain.handle('perform-ocr', async (_, dataUrl) => {
   try {
     await writeFile(tempPath, buffer)
     
-    // Path to paddleocr-json executable (assumed to be in resources)
-    const ocrPath = app.isPackaged 
-      ? join(process.resourcesPath, 'bin/PaddleOCR-json.exe')
-      : join(__dirname, '../../resources/bin/PaddleOCR-json.exe')
+    const binDir = app.isPackaged 
+      ? join(process.resourcesPath, 'bin')
+      : join(__dirname, '../../resources/bin')
+    
+    const ocrPath = join(binDir, 'PaddleOCR-json.exe')
+    const modelsPath = join(binDir, 'models')
+
     return new Promise((resolve, reject) => {
       // PaddleOCR-json requires the image path passed via arguments
       // It outputs log info and JSON result to stdout
-      // Try passing image path directly as argument or with --image_path depending on version
-      const args = [`--image_path=${tempPath}`]
+      // Fix: Pass models_path explicitly and run from temp dir to avoid crash when path contains Chinese characters
+      const args = [
+        `--image_path=${tempPath}`,
+        `--models_path=${modelsPath}`
+      ]
       console.log('Running OCR with:', ocrPath, args)
       
-      // IMPORTANT: Set cwd to the directory of the executable so it can find 'models' folder
-      const ocrProcess = spawn(ocrPath, args, {
-        cwd: dirname(ocrPath) 
-      })
+      let ocrProcess;
+      const timeoutTimer = setTimeout(() => {
+        if (ocrProcess) {
+           try { ocrProcess.kill() } catch (e) { /* ignore */ }
+        }
+        reject(new Error('OCR Timeout (10s) - Process took too long'))
+      }, 10000)
+
+      try {
+        // IMPORTANT: Set cwd to a safe ASCII path (like temp dir) to avoid 0xC0000409 crash
+        // when project path contains non-ASCII characters.
+        ocrProcess = spawn(ocrPath, args, {
+          cwd: os.tmpdir() 
+        })
+      } catch (spawnError: any) {
+        clearTimeout(timeoutTimer)
+        reject(new Error(`Failed to spawn OCR process: ${spawnError.message}`))
+        return
+      }
       
       let stdoutData = ''
       let stderrData = ''
@@ -180,7 +243,10 @@ ipcMain.handle('perform-ocr', async (_, dataUrl) => {
       })
 
       ocrProcess.on('close', async (code) => {
-        await unlink(tempPath)
+        clearTimeout(timeoutTimer)
+        try {
+            if (existsSync(tempPath)) await unlink(tempPath)
+        } catch (e) { /* ignore cleanup error */ }
         
         console.log('OCR Process exited with code:', code)
         // console.log('OCR Stdout:', stdoutData) 
@@ -226,8 +292,12 @@ ipcMain.handle('perform-ocr', async (_, dataUrl) => {
       })
 
       ocrProcess.on('error', async (err) => {
-        if (existsSync(tempPath)) await unlink(tempPath)
-        reject(err)
+        clearTimeout(timeoutTimer)
+        try {
+            if (existsSync(tempPath)) await unlink(tempPath)
+        } catch (e) { /* ignore cleanup error */ }
+        console.error('OCR Process Error:', err)
+        reject(new Error(`OCR Process Error: ${err.message}`))
       })
     })
   } catch (error) {
@@ -303,6 +373,65 @@ ipcMain.handle('simulate-reply', async (_, { text, focusCoords, sendCoords }) =>
   }
 })
 
+ipcMain.handle('wechat-bridge-start', async () => {
+  if (wechatBridgeProcess && !wechatBridgeProcess.killed) {
+    await waitForWeChatBridgeReady(2000)
+    return { ok: true }
+  }
+  const scriptPath = getWeChatBridgeScript()
+  const configPath = getWeChatBridgeConfig()
+  if (!existsSync(scriptPath)) {
+    return { ok: false, error: `wechat_bridge.py not found: ${scriptPath}` }
+  }
+  if (!existsSync(configPath)) {
+    return { ok: false, error: `config.yaml not found: ${configPath}` }
+  }
+  wechatBridgeProcess = spawn('python', [scriptPath, '--config', configPath], {
+    cwd: getSidecarWeChatDir(),
+    windowsHide: true
+  })
+  wechatBridgeProcess.on('exit', () => {
+    wechatBridgeProcess = null
+  })
+  await waitForWeChatBridgeReady(8000)
+  return { ok: true }
+})
+
+ipcMain.handle('wechat-bridge-stop', async () => {
+  if (wechatBridgeProcess && !wechatBridgeProcess.killed) {
+    try {
+      wechatBridgeProcess.kill()
+    } catch (e) {
+    }
+  }
+  wechatBridgeProcess = null
+  return { ok: true }
+})
+
+ipcMain.handle('wechat-bridge-poll', async () => {
+  const res = await fetch(`${getWeChatBridgeBaseUrl()}/poll`, { method: 'GET' })
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch (e) {
+    return { ok: false, error: 'invalid_json', raw: text }
+  }
+})
+
+ipcMain.handle('wechat-bridge-send', async (_, payload: { target: string; content: string }) => {
+  const res = await fetch(`${getWeChatBridgeBaseUrl()}/command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch (e) {
+    return { ok: false, error: 'invalid_json', raw: text }
+  }
+})
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.electron')
 
@@ -321,4 +450,14 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  if (wechatBridgeProcess && !wechatBridgeProcess.killed) {
+    try {
+      wechatBridgeProcess.kill()
+    } catch (e) {
+    }
+  }
+  wechatBridgeProcess = null
 })

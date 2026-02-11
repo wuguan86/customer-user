@@ -8,6 +8,10 @@ const api = {
   performOcr: (dataUrl) => electron.ipcRenderer.invoke("perform-ocr", dataUrl),
   simulateReply: (data) => electron.ipcRenderer.invoke("simulate-reply", data),
   onCaptureImage: (callback) => electron.ipcRenderer.on("capture-image", (_, data) => callback(data)),
+  startWeChatBridge: () => electron.ipcRenderer.invoke("wechat-bridge-start"),
+  stopWeChatBridge: () => electron.ipcRenderer.invoke("wechat-bridge-stop"),
+  pollWeChatMessages: () => electron.ipcRenderer.invoke("wechat-bridge-poll"),
+  sendWeChatMessage: (data) => electron.ipcRenderer.invoke("wechat-bridge-send", data),
   minimizeWindow: () => electron.ipcRenderer.send("window-minimize"),
   maximizeWindow: () => electron.ipcRenderer.send("window-maximize"),
   closeWindow: () => electron.ipcRenderer.send("window-close")

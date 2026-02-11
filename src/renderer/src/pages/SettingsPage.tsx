@@ -80,27 +80,11 @@ export default function SettingsPage(props: Props): JSX.Element {
     }
   }
 
-  const fetchBoundKnowledgeBase = async () => {
-    if (!backendBaseUrl || !userToken) {
-      setBoundKnowledgeBaseId('')
-      return
-    }
-    try {
-      const res = await axios.get(`${backendBaseUrl}/api/user/dify/kb`, { headers: getHeaders() })
-      setBoundKnowledgeBaseId(res.data?.knowledgeBaseId || '')
-    } catch (error) {
-      console.error('Failed to fetch knowledge base', error)
-    }
-  }
 
   useEffect(() => {
     if (backendBaseUrl && userToken) {
       fetchTasks()
     }
-  }, [backendBaseUrl, userToken])
-
-  useEffect(() => {
-    fetchBoundKnowledgeBase()
   }, [backendBaseUrl, userToken])
 
   const handleEdit = (task: Task) => {
@@ -112,6 +96,7 @@ export default function SettingsPage(props: Props): JSX.Element {
       status: task.status,
       knowledgeBaseId: task.knowledgeBaseId
     })
+    setBoundKnowledgeBaseId(task.knowledgeBaseId || '')
     setView('form')
   }
 
@@ -129,6 +114,19 @@ export default function SettingsPage(props: Props): JSX.Element {
   const handleToggleStatus = async (task: Task) => {
     const newStatus = task.status === 'RUNNING' ? 'PENDING' : 'RUNNING'
     try {
+      if (newStatus === 'RUNNING') {
+        const runningTasks = tasks.filter(item => item.status === 'RUNNING' && item.id !== task.id)
+        if (runningTasks.length > 0) {
+          await Promise.all(
+            runningTasks.map(item =>
+              axios.put(`${backendBaseUrl}/api/user/tasks/${item.id}`, {
+                ...item,
+                status: 'PENDING'
+              }, { headers: getHeaders() })
+            )
+          )
+        }
+      }
       await axios.put(`${backendBaseUrl}/api/user/tasks/${task.id}`, {
         ...task,
         status: newStatus
@@ -139,23 +137,43 @@ export default function SettingsPage(props: Props): JSX.Element {
     }
   }
 
-  const handleSave = async () => {
+  const saveTask = async (returnToList: boolean) => {
     if (!formData.name) {
       alert('请输入任务名称')
-      return
+      return null
+    }
+    if (formData.name.length > 15) {
+      alert('任务名称不能超过 15 个字符')
+      return null
     }
     try {
-      if (editingTask) {
-        await axios.put(`${backendBaseUrl}/api/user/tasks/${editingTask.id}`, formData, { headers: getHeaders() })
-      } else {
-        await axios.post(`${backendBaseUrl}/api/user/tasks`, formData, { headers: getHeaders() })
+      const res = editingTask
+        ? await axios.put(`${backendBaseUrl}/api/user/tasks/${editingTask.id}`, formData, { headers: getHeaders() })
+        : await axios.post(`${backendBaseUrl}/api/user/tasks`, formData, { headers: getHeaders() })
+      const savedTask = res.data as Task
+      setEditingTask(savedTask)
+      setFormData({
+        name: savedTask.name,
+        content: savedTask.content,
+        type: savedTask.type,
+        status: savedTask.status,
+        knowledgeBaseId: savedTask.knowledgeBaseId
+      })
+      setBoundKnowledgeBaseId(savedTask.knowledgeBaseId || '')
+      if (returnToList) {
+        setView('list')
       }
-      setView('list')
       fetchTasks()
+      return savedTask
     } catch (error) {
       console.error('Failed to save task', error)
       alert('保存失败')
+      return null
     }
+  }
+
+  const handleSave = async () => {
+    await saveTask(true)
   }
 
   const handleApplyTemplate = (template: PromptTemplate) => {
@@ -171,8 +189,14 @@ export default function SettingsPage(props: Props): JSX.Element {
     setIsTemplateModalOpen(true)
   }
 
-  const openKnowledgeModal = () => {
-    fetchBoundKnowledgeBase()
+  const openKnowledgeModal = async () => {
+    let task = editingTask
+    if (!task?.id) {
+      task = await saveTask(false)
+      if (!task) {
+        return
+      }
+    }
     setUploadStatus('')
     setIsUploadPanelOpen(false)
     setIsKnowledgeModalOpen(true)
@@ -221,9 +245,12 @@ export default function SettingsPage(props: Props): JSX.Element {
       alert('请先登录')
       return
     }
-    if (!boundKnowledgeBaseId) {
-      alert('请先绑定知识库 ID')
-      return
+    let task = editingTask
+    if (!task?.id) {
+      task = await saveTask(false)
+      if (!task) {
+        return
+      }
     }
     if (selectedFiles.length === 0) {
       alert('请先添加文件')
@@ -246,11 +273,17 @@ export default function SettingsPage(props: Props): JSX.Element {
       formDataPayload.append('file', file)
 
       try {
-        await axios.post(
-          `${backendBaseUrl}/api/user/dify/datasets/${boundKnowledgeBaseId}/document/create-by-file`,
+        const res = await axios.post(
+          `${backendBaseUrl}/api/user/dify/tasks/${task.id}/kb/document/create-by-file`,
           formDataPayload,
           { headers: getHeaders() }
         )
+        const newKnowledgeBaseId = res.data?.knowledgeBaseId
+        if (newKnowledgeBaseId && newKnowledgeBaseId !== boundKnowledgeBaseId) {
+          setBoundKnowledgeBaseId(newKnowledgeBaseId)
+          setFormData(prev => ({ ...prev, knowledgeBaseId: newKnowledgeBaseId }))
+          setEditingTask(prev => (prev ? { ...prev, knowledgeBaseId: newKnowledgeBaseId } : prev))
+        }
       } catch (err: any) {
         setUploadStatus('上传失败: ' + (err.response?.data?.message || err.message))
         setIsUploading(false)
@@ -262,12 +295,10 @@ export default function SettingsPage(props: Props): JSX.Element {
   }
 
   const ToggleSwitch = ({ checked, onChange }: { checked: boolean; onChange: () => void }) => (
-    <div className={`switch-container ${checked ? 'active' : ''}`} onClick={onChange}>
-      <span className="status-dot" />
-      <div className={`switch-track ${checked ? 'active' : ''}`}>
-        <div className="switch-handle" />
+    <div className={`switch-wrapper ${checked ? 'running' : ''}`}>
+      <div className={`switch-component ${checked ? 'active' : ''}`} onClick={onChange}>
+        <div className="switch-knob" />
       </div>
-      <span className="switch-label">{checked ? '运行中' : '已暂停'}</span>
     </div>
   )
 
@@ -535,6 +566,7 @@ export default function SettingsPage(props: Props): JSX.Element {
                 status: 'PENDING',
                 knowledgeBaseId: ''
               })
+              setBoundKnowledgeBaseId('')
               setEditingTask(null)
               setView('form')
             }}
@@ -559,12 +591,12 @@ export default function SettingsPage(props: Props): JSX.Element {
             <table className="task-table">
               <thead>
                 <tr>
-                  <th>任务名称</th>
-                  <th>任务描述</th>
-                  <th>用户</th>
-                  <th>任务类型</th>
-                  <th>开启状态</th>
-                  <th className="task-table-right">操作</th>
+                  <th className="col-name">任务名称</th>
+                  <th className="col-desc">任务描述</th>
+                  <th className="col-user">用户</th>
+                  <th className="col-type">任务类型</th>
+                  <th className="col-status">开启状态</th>
+                  <th className="col-action task-table-right">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -583,8 +615,12 @@ export default function SettingsPage(props: Props): JSX.Element {
                     </td>
                     <td className="task-table-right">
                       <div className="task-table-actions">
-                        <button onClick={() => handleEdit(task)} className="task-link-btn">编辑</button>
-                        <button onClick={() => handleDelete(task.id)} className="task-danger-link">删除</button>
+                        <button onClick={() => handleEdit(task)} className="task-icon-btn-only" data-tooltip="编辑">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>
+                        <button onClick={() => handleDelete(task.id)} className="task-icon-btn-only danger" data-tooltip="删除">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                        </button>
                       </div>
                     </td>
                   </tr>

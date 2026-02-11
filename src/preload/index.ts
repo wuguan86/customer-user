@@ -12,6 +12,10 @@ const api = {
   performOcr: (dataUrl: string) => ipcRenderer.invoke('perform-ocr', dataUrl),
   simulateReply: (data: { text: string; focusCoords?: {x:number,y:number}; sendCoords?: {x:number,y:number} }) => ipcRenderer.invoke('simulate-reply', data),
   onCaptureImage: (callback: CaptureCallback) => ipcRenderer.on('capture-image', (_, data: CaptureResult) => callback(data)),
+  startWeChatBridge: () => ipcRenderer.invoke('wechat-bridge-start'),
+  stopWeChatBridge: () => ipcRenderer.invoke('wechat-bridge-stop'),
+  pollWeChatMessages: () => ipcRenderer.invoke('wechat-bridge-poll'),
+  sendWeChatMessage: (data: { target: string; content: string }) => ipcRenderer.invoke('wechat-bridge-send', data),
   minimizeWindow: () => ipcRenderer.send('window-minimize'),
   maximizeWindow: () => ipcRenderer.send('window-maximize'),
   closeWindow: () => ipcRenderer.send('window-close')

@@ -59,7 +59,9 @@ function MePage(props: Props): JSX.Element {
       setError('')
       try {
         // Handle headers: Authorization is optional if no userToken
-        const headers: Record<string, string> = { 'X-Tenant-Id': tenantId }
+        const safeTenantId = tenantId.trim() || '1'
+        const safeBackendUrl = backendBaseUrl.trim()
+        const headers: Record<string, string> = { 'X-Tenant-Id': safeTenantId }
         if (userToken) {
           headers['Authorization'] = `Bearer ${userToken}`
         }
@@ -67,7 +69,7 @@ function MePage(props: Props): JSX.Element {
         // Fetch User Me (only if logged in)
         if (userToken) {
           try {
-            const meRes = await axios.get(`${backendBaseUrl}/api/user/me`, { headers })
+            const meRes = await axios.get(`${safeBackendUrl}/api/user/me`, { headers })
             setMe(meRes.data)
           } catch (meError: any) {
             console.error('Failed to fetch user profile', meError)
@@ -83,7 +85,7 @@ function MePage(props: Props): JSX.Element {
 
         // Fetch Plans (Public endpoint)
         try {
-            const plansRes = await axios.get<MembershipPlan[]>(`${backendBaseUrl}/api/user/membership/plans`, { headers })
+            const plansRes = await axios.get<MembershipPlan[]>(`${safeBackendUrl}/api/user/membership/plans`, { headers })
             const plans = plansRes.data
             
             // Process Monthly Plans
@@ -154,7 +156,8 @@ function MePage(props: Props): JSX.Element {
           {/* User Profile Card */}
           <div className="dashboard-card user-card">
             <div className="user-content">
-              <div className="avatar-group">
+              {/* Top Row: Avatar & Name */}
+              <div className="user-header">
                 <div className="avatar-wrapper">
                   {me?.avatarUrl ? (
                     <img src={me.avatarUrl} alt="avatar" />
@@ -165,24 +168,22 @@ function MePage(props: Props): JSX.Element {
                   )}
                 </div>
                 <div className="user-details">
-                  <div className="user-name-row">
-                    <h2 className="user-name">{me?.nickname || '未登录'}</h2>
-                    <span className="user-badge">{me ? '免费版' : '访客'}</span>
-                  </div>
-                  <p className="user-id">ID: {me?.id || '-'}</p>
+                  <h2 className="user-name">{me?.nickname || '未登录'}</h2>
                 </div>
               </div>
-              <button 
-                className="logout-btn-icon" 
-                onClick={onLogout} 
-                title={me ? "退出登录" : "点击登录"}
-              >
-                {me ? (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-                ) : (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-                )}
-              </button>
+
+              {/* Bottom Row: Badge & Logout */}
+              <div className="user-actions">
+                <span className="user-badge">{me ? '免费版' : '访客'}</span>
+                <button 
+                  className="logout-btn" 
+                  onClick={onLogout} 
+                  title={me ? "退出登录" : "点击登录"}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                  <span>退出登录</span>
+                </button>
+              </div>
             </div>
             <div className="card-decoration"></div>
           </div>

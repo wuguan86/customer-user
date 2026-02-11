@@ -46,10 +46,12 @@ function LoginPage(props: Props): JSX.Element {
         const status = (res.status || '').toUpperCase()
 
         if (status === 'COMPLETED' && res.token) {
+          const resolvedTenantId =
+            String(res.tenantId ?? '').trim() || tenantId.trim() || '1'
           stopPolling()
           onLoginSuccess({
             token: res.token,
-            tenantId: String(res.tenantId ?? tenantId ?? '1'),
+            tenantId: resolvedTenantId,
             userId: Number(res.userId ?? 0)
           })
           setStatusText('登录成功，正在进入...')
@@ -107,21 +109,18 @@ function LoginPage(props: Props): JSX.Element {
   }
 
   const handleWeChatLogin = async () => {
-    // TEMP: 临时开发直接跳过登录
-    onLoginSuccess({
-      token: 'dev-token',
-      tenantId: tenantId || '1',
-      userId: 1
-    })
-    return
-
-    // const url = backendBaseUrl.trim()
-    // if (!url) {
-    //   setErrorText('后端地址配置错误，请联系管理员')
-    //   return
-    // }
-    // setIsModalOpen(true)
-    // await refreshQrCode()
+    setErrorText('')
+    if (!isAgreed) {
+      setErrorText('请先同意服务协议和隐私政策')
+      return
+    }
+    const url = backendBaseUrl.trim()
+    if (!url) {
+      setErrorText('后端地址配置错误，请联系管理员')
+      return
+    }
+    setIsModalOpen(true)
+    await refreshQrCode()
   }
 
   useEffect(() => {

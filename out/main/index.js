@@ -8,6 +8,35 @@ const os = require("os");
 const utils = require("@electron-toolkit/utils");
 let mainWindow = null;
 let captureWindow = null;
+let wechatBridgeProcess = null;
+const getSidecarWeChatDir = () => {
+  const appPath = electron.app.getAppPath();
+  const candidate = path.join(path.dirname(appPath), "sidecar_wechat");
+  return candidate;
+};
+const getWeChatBridgeScript = () => {
+  return path.join(getSidecarWeChatDir(), "wechat_bridge.py");
+};
+const getWeChatBridgeConfig = () => {
+  return path.join(getSidecarWeChatDir(), "config.yaml");
+};
+const getWeChatBridgeBaseUrl = () => {
+  return "http://127.0.0.1:51234";
+};
+const waitForWeChatBridgeReady = async (timeoutMs) => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${getWeChatBridgeBaseUrl()}/health`, { method: "GET" });
+      if (res.ok) {
+        return;
+      }
+    } catch (e) {
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("WeChat bridge not ready");
+};
 function createWindow() {
   mainWindow = new electron.BrowserWindow({
     width: 900,
@@ -109,7 +138,12 @@ electron.ipcMain.handle("do-capture", async (_, coords) => {
       height: Math.max(1, Math.round(coords.h * scaleFactor))
     };
     const image = primarySource.thumbnail.crop(cropRect);
-    const dataUrl = image.toDataURL();
+    const scaledImage = image.resize({
+      width: image.getSize().width * 2,
+      height: image.getSize().height * 2,
+      quality: "high"
+    });
+    const dataUrl = scaledImage.toDataURL();
     let isManual = false;
     if (captureWindow) {
       captureWindow.close();
@@ -129,13 +163,34 @@ electron.ipcMain.handle("perform-ocr", async (_, dataUrl) => {
   const tempPath = path.join(os.tmpdir(), `ocr_temp_${Date.now()}.png`);
   try {
     await promises.writeFile(tempPath, buffer);
-    const ocrPath = electron.app.isPackaged ? path.join(process.resourcesPath, "bin/PaddleOCR-json.exe") : path.join(__dirname, "../../resources/bin/PaddleOCR-json.exe");
+    const binDir = electron.app.isPackaged ? path.join(process.resourcesPath, "bin") : path.join(__dirname, "../../resources/bin");
+    const ocrPath = path.join(binDir, "PaddleOCR-json.exe");
+    const modelsPath = path.join(binDir, "models");
     return new Promise((resolve, reject) => {
-      const args = [`--image_path=${tempPath}`];
+      const args = [
+        `--image_path=${tempPath}`,
+        `--models_path=${modelsPath}`
+      ];
       console.log("Running OCR with:", ocrPath, args);
-      const ocrProcess = child_process.spawn(ocrPath, args, {
-        cwd: path.dirname(ocrPath)
-      });
+      let ocrProcess;
+      const timeoutTimer = setTimeout(() => {
+        if (ocrProcess) {
+          try {
+            ocrProcess.kill();
+          } catch (e) {
+          }
+        }
+        reject(new Error("OCR Timeout (10s) - Process took too long"));
+      }, 1e4);
+      try {
+        ocrProcess = child_process.spawn(ocrPath, args, {
+          cwd: os.tmpdir()
+        });
+      } catch (spawnError) {
+        clearTimeout(timeoutTimer);
+        reject(new Error(`Failed to spawn OCR process: ${spawnError.message}`));
+        return;
+      }
       let stdoutData = "";
       let stderrData = "";
       ocrProcess.stdout.on("data", (data) => {
@@ -145,7 +200,11 @@ electron.ipcMain.handle("perform-ocr", async (_, dataUrl) => {
         stderrData += data.toString();
       });
       ocrProcess.on("close", async (code) => {
-        await promises.unlink(tempPath);
+        clearTimeout(timeoutTimer);
+        try {
+          if (fs.existsSync(tempPath)) await promises.unlink(tempPath);
+        } catch (e) {
+        }
         console.log("OCR Process exited with code:", code);
         const lines = stdoutData.split(/\r?\n/);
         let result = { text: "", items: [] };
@@ -178,8 +237,13 @@ electron.ipcMain.handle("perform-ocr", async (_, dataUrl) => {
         }
       });
       ocrProcess.on("error", async (err) => {
-        if (fs.existsSync(tempPath)) await promises.unlink(tempPath);
-        reject(err);
+        clearTimeout(timeoutTimer);
+        try {
+          if (fs.existsSync(tempPath)) await promises.unlink(tempPath);
+        } catch (e) {
+        }
+        console.error("OCR Process Error:", err);
+        reject(new Error(`OCR Process Error: ${err.message}`));
       });
     });
   } catch (error) {
@@ -243,6 +307,61 @@ electron.ipcMain.handle("simulate-reply", async (_, { text, focusCoords, sendCoo
     return { success: false, error: e };
   }
 });
+electron.ipcMain.handle("wechat-bridge-start", async () => {
+  if (wechatBridgeProcess && !wechatBridgeProcess.killed) {
+    await waitForWeChatBridgeReady(2e3);
+    return { ok: true };
+  }
+  const scriptPath = getWeChatBridgeScript();
+  const configPath = getWeChatBridgeConfig();
+  if (!fs.existsSync(scriptPath)) {
+    return { ok: false, error: `wechat_bridge.py not found: ${scriptPath}` };
+  }
+  if (!fs.existsSync(configPath)) {
+    return { ok: false, error: `config.yaml not found: ${configPath}` };
+  }
+  wechatBridgeProcess = child_process.spawn("python", [scriptPath, "--config", configPath], {
+    cwd: getSidecarWeChatDir(),
+    windowsHide: true
+  });
+  wechatBridgeProcess.on("exit", () => {
+    wechatBridgeProcess = null;
+  });
+  await waitForWeChatBridgeReady(8e3);
+  return { ok: true };
+});
+electron.ipcMain.handle("wechat-bridge-stop", async () => {
+  if (wechatBridgeProcess && !wechatBridgeProcess.killed) {
+    try {
+      wechatBridgeProcess.kill();
+    } catch (e) {
+    }
+  }
+  wechatBridgeProcess = null;
+  return { ok: true };
+});
+electron.ipcMain.handle("wechat-bridge-poll", async () => {
+  const res = await fetch(`${getWeChatBridgeBaseUrl()}/poll`, { method: "GET" });
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return { ok: false, error: "invalid_json", raw: text };
+  }
+});
+electron.ipcMain.handle("wechat-bridge-send", async (_, payload) => {
+  const res = await fetch(`${getWeChatBridgeBaseUrl()}/command`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return { ok: false, error: "invalid_json", raw: text };
+  }
+});
 electron.app.whenReady().then(() => {
   utils.electronApp.setAppUserModelId("com.electron");
   electron.app.on("browser-window-created", (_, window) => {
@@ -257,4 +376,13 @@ electron.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     electron.app.quit();
   }
+});
+electron.app.on("before-quit", () => {
+  if (wechatBridgeProcess && !wechatBridgeProcess.killed) {
+    try {
+      wechatBridgeProcess.kill();
+    } catch (e) {
+    }
+  }
+  wechatBridgeProcess = null;
 });

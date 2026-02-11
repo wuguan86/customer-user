@@ -21,11 +21,13 @@ function App(): JSX.Element {
   const [hash, setHash] = useState(window.location.hash || "#/");
   const route = useMemo(() => parseHashRoute(hash), [hash]);
 
+  const normalizeTenantId = (value: string) =>
+    value.trim() || AppConfig.defaultTenantId;
   const [backendBaseUrl, setBackendBaseUrl] = useState<string>(
     localStorage.getItem("backendBaseUrl") || AppConfig.apiBaseUrl,
   );
   const [tenantId, setTenantId] = useState<string>(
-    localStorage.getItem("tenantId") || AppConfig.defaultTenantId,
+    normalizeTenantId(localStorage.getItem("tenantId") || ""),
   );
   const [userToken, setUserToken] = useState<string>(
     localStorage.getItem("userToken") || "",
@@ -60,14 +62,14 @@ function App(): JSX.Element {
     return <Capture />;
   }
 
-  if (!userToken && route !== 'me') {
+  if (!userToken) {
     return (
       <LoginPage
         backendBaseUrl={backendBaseUrl}
         tenantId={tenantId}
         onLoginSuccess={(auth) => {
           setUserToken(auth.token);
-          setTenantId(auth.tenantId);
+          setTenantId(normalizeTenantId(auth.tenantId));
           navigate("assistant");
         }}
       />
