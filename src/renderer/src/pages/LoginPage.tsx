@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import QRCode from 'qrcode'
 import { fetchWeChatLoginStatus, fetchWeChatQrCode } from '../auth/wechatLogin'
 import TitleBar from '../components/TitleBar'
 
@@ -14,7 +13,6 @@ function LoginPage(props: Props): JSX.Element {
 
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [qrDataUrl, setQrDataUrl] = useState<string>('')
-  const [loginState, setLoginState] = useState<string>('')
   const [statusText, setStatusText] = useState<string>('')
   const [isLoadingQr, setIsLoadingQr] = useState(false)
   const [errorText, setErrorText] = useState('')
@@ -42,7 +40,7 @@ function LoginPage(props: Props): JSX.Element {
     stopPolling()
     pollTimerRef.current = window.setInterval(async () => {
       try {
-        const res = await fetchWeChatLoginStatus(backendBaseUrl.trim(), state)
+        const res = await fetchWeChatLoginStatus(state)
         const status = (res.status || '').toUpperCase()
 
         if (status === 'COMPLETED' && res.token) {
@@ -72,7 +70,7 @@ function LoginPage(props: Props): JSX.Element {
         }
 
         if (status === 'PROCESSING') {
-          setStatusText('已扫码，等待确认...')
+          setStatusText('已扫码，正在登录...')
           return
         }
 
@@ -90,19 +88,14 @@ function LoginPage(props: Props): JSX.Element {
     setIsLoadingQr(true)
     stopPolling()
     try {
-      const qr = await fetchWeChatQrCode(backendBaseUrl.trim(), tenantId.trim() || '1')
-      const dataUrl = await QRCode.toDataURL(qr.url, {
-        width: 260,
-        margin: 1,
-        errorCorrectionLevel: 'M',
-        color: { dark: '#0B1F1A', light: '#FFFFFF' }
-      })
-      setQrDataUrl(dataUrl)
-      setLoginState(qr.state)
+      const qr = await fetchWeChatQrCode(tenantId.trim() || '1')
+      setQrDataUrl(qr.url)
       setStatusText('请使用微信扫码登录')
       startPolling(qr.state)
     } catch (e: any) {
-      setErrorText(e?.response?.data?.message || e?.message || '获取二维码失败')
+      const errorMsg = e?.response?.data?.msg || e?.response?.data?.message || e?.message || '获取二维码失败'
+      setErrorText(errorMsg)
+      setStatusText(errorMsg)
     } finally {
       setIsLoadingQr(false)
     }

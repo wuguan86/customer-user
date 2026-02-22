@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow, ipcMain, desktopCapturer, screen } from 'ele
 import { join, dirname } from 'path'
 import { writeFile, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
-import { spawn } from 'child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import os from 'os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 
@@ -165,7 +165,7 @@ ipcMain.handle('do-capture', async (_, coords) => {
     const scaledImage = image.resize({
       width: image.getSize().width * 2,
       height: image.getSize().height * 2,
-      quality: 'high'
+      quality: 'best'
     })
     
     const dataUrl = scaledImage.toDataURL()
@@ -211,7 +211,7 @@ ipcMain.handle('perform-ocr', async (_, dataUrl) => {
       ]
       console.log('Running OCR with:', ocrPath, args)
       
-      let ocrProcess;
+      let ocrProcess: ChildProcessWithoutNullStreams | null = null
       const timeoutTimer = setTimeout(() => {
         if (ocrProcess) {
            try { ocrProcess.kill() } catch (e) { /* ignore */ }

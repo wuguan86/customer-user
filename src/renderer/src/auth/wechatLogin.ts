@@ -1,4 +1,4 @@
-import axios from 'axios'
+import http from '../utils/http'
 
 export type WeChatQrCodeResult = {
   url: string
@@ -12,15 +12,17 @@ export type WeChatLoginPollResult = {
   tenantId: number | null
 }
 
-export async function fetchWeChatQrCode(backendBaseUrl: string, tenantId: string): Promise<WeChatQrCodeResult> {
-  const response = await axios.get(`${backendBaseUrl}/api/user/auth/wechat/qrcode`, {
+export async function fetchWeChatQrCode(tenantId: string): Promise<WeChatQrCodeResult> {
+  const res = await http.get<WeChatQrCodeResult>('/api/user/auth/wechat/qrcode', {
     params: { tenantId: tenantId || '1' }
   })
-  return response.data
+  return res as unknown as WeChatQrCodeResult
 }
 
-export async function fetchWeChatLoginStatus(backendBaseUrl: string, state: string): Promise<WeChatLoginPollResult> {
-  const response = await axios.get(`${backendBaseUrl}/api/user/auth/wechat/status`, { params: { state } })
-  return response.data
+export async function fetchWeChatLoginStatus(state: string): Promise<WeChatLoginPollResult> {
+  const res = await http.get<WeChatLoginPollResult>('/api/user/auth/wechat/status', {
+    params: { state }
+  })
+  return res as unknown as WeChatLoginPollResult
 }
 

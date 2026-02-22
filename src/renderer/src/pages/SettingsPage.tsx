@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import axios from 'axios'
+import http from '../utils/http'
 
 type Props = {
   backendBaseUrl: string
@@ -51,19 +51,11 @@ export default function SettingsPage(props: Props): JSX.Element {
   const [isDragging, setIsDragging] = useState(false)
   const [boundKnowledgeBaseId, setBoundKnowledgeBaseId] = useState('')
 
-  const getHeaders = () => {
-    const headers: Record<string, string> = { 'X-Tenant-Id': tenantId }
-    if (userToken) {
-      headers['Authorization'] = `Bearer ${userToken}`
-    }
-    return headers
-  }
-
   const fetchTasks = async () => {
     setLoading(true)
     try {
-      const res = await axios.get(`${backendBaseUrl}/api/user/tasks`, { headers: getHeaders() })
-      setTasks(res.data)
+      const data = await http.get<Task[]>('/api/user/tasks')
+      setTasks(data)
     } catch (error) {
       console.error('Failed to fetch tasks', error)
     } finally {
@@ -73,8 +65,8 @@ export default function SettingsPage(props: Props): JSX.Element {
 
   const fetchTemplates = async () => {
     try {
-      const res = await axios.get(`${backendBaseUrl}/api/user/prompt-templates`, { headers: getHeaders() })
-      setTemplates(res.data)
+      const data = await http.get<PromptTemplate[]>('/api/user/prompt-templates')
+      setTemplates(data)
     } catch (error) {
       console.error('Failed to fetch templates', error)
     }
@@ -103,7 +95,7 @@ export default function SettingsPage(props: Props): JSX.Element {
   const handleDelete = async (id: number) => {
     if (!confirm('确定要删除这个任务吗？')) return
     try {
-      await axios.delete(`${backendBaseUrl}/api/user/tasks/${id}`, { headers: getHeaders() })
+      await http.delete(`/api/user/tasks/${id}`)
       fetchTasks()
     } catch (error) {
       console.error('Failed to delete task', error)
@@ -119,18 +111,18 @@ export default function SettingsPage(props: Props): JSX.Element {
         if (runningTasks.length > 0) {
           await Promise.all(
             runningTasks.map(item =>
-              axios.put(`${backendBaseUrl}/api/user/tasks/${item.id}`, {
+              http.put(`/api/user/tasks/${item.id}`, {
                 ...item,
                 status: 'PENDING'
-              }, { headers: getHeaders() })
+              })
             )
           )
         }
       }
-      await axios.put(`${backendBaseUrl}/api/user/tasks/${task.id}`, {
+      await http.put(`/api/user/tasks/${task.id}`, {
         ...task,
         status: newStatus
-      }, { headers: getHeaders() })
+      })
       fetchTasks()
     } catch (error) {
       console.error('Failed to toggle status', error)
@@ -147,10 +139,9 @@ export default function SettingsPage(props: Props): JSX.Element {
       return null
     }
     try {
-      const res = editingTask
-        ? await axios.put(`${backendBaseUrl}/api/user/tasks/${editingTask.id}`, formData, { headers: getHeaders() })
-        : await axios.post(`${backendBaseUrl}/api/user/tasks`, formData, { headers: getHeaders() })
-      const savedTask = res.data as Task
+      const savedTask = editingTask
+        ? await http.put<Task>(`/api/user/tasks/${editingTask.id}`, formData)
+        : await http.post<Task>('/api/user/tasks', formData)
       setEditingTask(savedTask)
       setFormData({
         name: savedTask.name,
@@ -273,12 +264,11 @@ export default function SettingsPage(props: Props): JSX.Element {
       formDataPayload.append('file', file)
 
       try {
-        const res = await axios.post(
-          `${backendBaseUrl}/api/user/dify/tasks/${task.id}/kb/document/create-by-file`,
-          formDataPayload,
-          { headers: getHeaders() }
+        const res = await http.postForm<{ knowledgeBaseId: string }>(
+          `/api/user/dify/tasks/${task.id}/kb/document/create-by-file`,
+          formDataPayload
         )
-        const newKnowledgeBaseId = res.data?.knowledgeBaseId
+        const newKnowledgeBaseId = res?.knowledgeBaseId
         if (newKnowledgeBaseId && newKnowledgeBaseId !== boundKnowledgeBaseId) {
           setBoundKnowledgeBaseId(newKnowledgeBaseId)
           setFormData(prev => ({ ...prev, knowledgeBaseId: newKnowledgeBaseId }))

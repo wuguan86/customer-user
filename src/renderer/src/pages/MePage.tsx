@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import axios from 'axios'
+import http from '../utils/http'
 
 type Props = {
   backendBaseUrl: string
@@ -60,19 +60,19 @@ function MePage(props: Props): JSX.Element {
       try {
         // Handle headers: Authorization is optional if no userToken
         const safeTenantId = tenantId.trim() || '1'
-        const safeBackendUrl = backendBaseUrl.trim()
         const headers: Record<string, string> = { 'X-Tenant-Id': safeTenantId }
         if (userToken) {
           headers['Authorization'] = `Bearer ${userToken}`
         }
-        
+
         // Fetch User Me (only if logged in)
         if (userToken) {
           try {
-            const meRes = await axios.get(`${safeBackendUrl}/api/user/me`, { headers })
-            setMe(meRes.data)
+            const meData = await http.get<MeResponse>('/api/user/me', { headers })
+            setMe(meData)
           } catch (meError: any) {
             console.error('Failed to fetch user profile', meError)
+            setError(meError.message || '获取用户信息失败')
             if (meError.response?.status === 401) {
               // Token expired or invalid
               setMe(null)
@@ -85,8 +85,7 @@ function MePage(props: Props): JSX.Element {
 
         // Fetch Plans (Public endpoint)
         try {
-            const plansRes = await axios.get<MembershipPlan[]>(`${safeBackendUrl}/api/user/membership/plans`, { headers })
-            const plans = plansRes.data
+            const plans = await http.get<MembershipPlan[]>('/api/user/membership/plans', { headers })
             
             // Process Monthly Plans
             const monthly = plans
@@ -168,7 +167,7 @@ function MePage(props: Props): JSX.Element {
                   )}
                 </div>
                 <div className="user-details">
-                  <h2 className="user-name">{me?.nickname || '未登录'}</h2>
+                  <h2 className="user-name">{me?.nickname || (me ? '微信用户' : '未登录')}</h2>
                 </div>
               </div>
 

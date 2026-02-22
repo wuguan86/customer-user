@@ -141,7 +141,7 @@ electron.ipcMain.handle("do-capture", async (_, coords) => {
     const scaledImage = image.resize({
       width: image.getSize().width * 2,
       height: image.getSize().height * 2,
-      quality: "high"
+      quality: "best"
     });
     const dataUrl = scaledImage.toDataURL();
     let isManual = false;
@@ -172,7 +172,7 @@ electron.ipcMain.handle("perform-ocr", async (_, dataUrl) => {
         `--models_path=${modelsPath}`
       ];
       console.log("Running OCR with:", ocrPath, args);
-      let ocrProcess;
+      let ocrProcess = null;
       const timeoutTimer = setTimeout(() => {
         if (ocrProcess) {
           try {

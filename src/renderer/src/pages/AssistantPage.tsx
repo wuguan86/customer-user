@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import axios from 'axios'
+import http from '../utils/http'
 
 type CaptureBounds = { x: number; y: number; w: number; h: number }
 type Task = { id: number; name: string; content: string; status: string; type: string }
@@ -406,19 +406,12 @@ function AssistantPage(props: Props): JSX.Element {
   const contactQueueRef = useRef<Map<string, Promise<void>>>(new Map())
   const lastProcessedByContactRef = useRef<Map<string, { text: string; at: number }>>(new Map())
 
-  const getTransitHeaders = () => {
-    const headers: Record<string, string> = { 'X-Tenant-Id': tenantId }
-    if (userToken) {
-      headers['Authorization'] = `Bearer ${userToken}`
-    }
-    return headers
-  }
-
   const fetchRunningTask = async (): Promise<Task | null> => {
     try {
-      const headers = getTransitHeaders()
-      const res = await axios.get(`${backendBaseUrl}/api/user/tasks`, { headers })
-      const running = (res.data as Task[]).find((task) => task.status === 'RUNNING') || null
+      const res = await http.get<Task[]>('/api/user/tasks')
+      // http.ts returns res.data directly if success, which is Task[]
+      const tasks = res as unknown as Task[]
+      const running = tasks.find((task) => task.status === 'RUNNING') || null
       setActiveTask(running)
       return running
     } catch (error) {
@@ -510,18 +503,17 @@ function AssistantPage(props: Props): JSX.Element {
         setDifyResponse('请先在任务设置中开启一个任务')
         return
       }
-      const headers = getTransitHeaders()
-      const res = await axios.post(
-        `${backendBaseUrl}/api/user/dify/monitor-chat`,
+      const res = await http.post<{ answer: string }>(
+        '/api/user/dify/monitor-chat',
         {
           taskId: task.id,
           message: normalizedText,
           role: task.content || '',
           wechatContact: contact
-        },
-        { headers }
+        }
       )
-      const reply = res.data.answer
+      // res is the data object directly
+      const reply = (res as any).answer
       setDifyResponse(reply)
       if (reply) {
         const api = (window as any).api
@@ -533,11 +525,8 @@ function AssistantPage(props: Props): JSX.Element {
         }
       }
     } catch (err: any) {
-      if (err.response?.status === 401 && onLogout) {
-        onLogout()
-        return
-      }
-      setDifyResponse('发送失败: ' + (err.response?.data?.message || err.message))
+      // http.ts handles 401 logout
+      setDifyResponse('发送失败: ' + (err.message || 'Error'))
     } finally {
       setIsSending(false)
     }
